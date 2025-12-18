@@ -1,73 +1,103 @@
-from fastapi import FastAPI, UploadFile
-import subprocess
-import uuid
-import os
-import shutil
+from __future__ import annotations
 
-# Absolute paths to Python executables
-SAM3_PY   = "/home/ferdinand/miniforge3/envs/sam3/bin/python"
-SAM3D_PY = "/home/ferdinand/miniforge3/envs/sam3d-objects/bin/python"
-BASE_PY  = "/home/ferdinand/miniforge3/bin/python"
+import asyncio
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Dict
 
-BASE_JOBS = "/home/ferdinand/sam_server/jobs"
-os.makedirs(BASE_JOBS, exist_ok=True)
+from fastapi import FastAPI, HTTPException, UploadFile
 
-app = FastAPI()
+from config import (
+    CONVERSION_STAGE,
+    JOBS_ROOT,
+    SERVER_HOST,
+    SERVER_PORT,
+    WORKER_LOG_PREFIX,
+)
+from job_state import (
+    create_job_directory,
+    current_artifacts,
+    load_state,
+    set_stage_status,
+    wait_for_stage,
+)
+from worker_manager import WorkerManager
+
+manager = WorkerManager()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print(f"{WORKER_LOG_PREFIX} starting worker subprocesses")
+    manager.start()
+    try:
+        yield
+    finally:
+        print(f"{WORKER_LOG_PREFIX} stopping worker subprocesses")
+        manager.stop()
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+def _job_dir(job_id: str) -> Path:
+    candidate = JOBS_ROOT / job_id
+    if not candidate.exists():
+        raise HTTPException(status_code=404, detail="Job not found")
+    return candidate
 
 
 @app.post("/reconstruct")
-async def reconstruct(image: UploadFile):
-    job_id = str(uuid.uuid4())
-    job_dir = os.path.join(BASE_JOBS, job_id)
-    os.makedirs(job_dir)
+async def reconstruct(image: UploadFile) -> Dict[str, str]:
+    job_dir = create_job_directory()
+    input_path = job_dir / "input.png"
 
-    # ---- save input ----
-    img_path = os.path.join(job_dir, "input.png")
-    with open(img_path, "wb") as f:
+    with open(input_path, "wb") as f:
         f.write(await image.read())
 
-    mask_path = os.path.join(job_dir, "mask.png")
-    ply_path  = os.path.join(job_dir, "object.ply")
-    obj_path  = os.path.join(job_dir, "object.obj")
-    stl_path  = os.path.join(job_dir, "object.stl")
-    png_path  = os.path.join(job_dir, "preview.png")
+    success = await asyncio.to_thread(
+        wait_for_stage,
+        job_dir,
+        CONVERSION_STAGE,
+        timeout_seconds=3600,
+        poll_seconds=1.0,
+    )
 
-    env = os.environ.copy()
-    env["CUDA_VISIBLE_DEVICES"] = "0"  # one GPU
+    if not success:
+        state = load_state(job_dir)
+        failed_stage = next(
+            (
+                (stage, details)
+                for stage, details in state["stages"].items()
+                if details.get("status") == "failed"
+            ),
+            None,
+        )
+        error_message = (
+            failed_stage[1].get("error")
+            or f"Stage {failed_stage[0]} failed"
+            if failed_stage
+            else "Job did not finish"
+        )
+        set_stage_status(job_dir, CONVERSION_STAGE, "failed", error=error_message)
+        raise HTTPException(status_code=500, detail=error_message)
 
-    # ---- SAM ----
-    subprocess.run([
-        SAM3_PY, "scripts/run_sam.py",
-        "--image", img_path,
-        "--out", mask_path
-    ], check=True, env=env)
-
-    # ---- SAM-3D ----
-    subprocess.run([
-        SAM3D_PY, "scripts/run_sam3d.py",
-        "--image", img_path,
-        "--mask", mask_path,
-        "--out", ply_path
-    ], check=True, env=env)
-
-    # ---- Mesh conversion ----
-    subprocess.run([
-        BASE_PY, "scripts/convert_ply.py",
-        "--in", ply_path,
-        "--out-obj", obj_path,
-        "--out-stl", stl_path
-    ], check=True)
-
-    # ---- Preview render ----
-    subprocess.run([
-        BASE_PY, "scripts/render_preview.py",
-        "--mesh", obj_path,
-        "--out", png_path
-    ], check=True)
-
+    artifacts = current_artifacts(job_dir)
     return {
-        "job_id": job_id,
-        "obj": obj_path,
-        "stl": stl_path,
-        "png": png_path
+        "job_id": job_dir.name,
+        "obj": artifacts.get("visual_obj"),
+        "stl": artifacts.get("visual_stl"),
+        "preview": artifacts.get("reconstruction_preview"),
     }
+
+
+@app.get("/jobs/{job_id}")
+async def job_status(job_id: str) -> Dict:
+    job_dir = _job_dir(job_id)
+    return load_state(job_dir)
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("scripts.sam_server:app", host=SERVER_HOST, port=SERVER_PORT, reload=False)

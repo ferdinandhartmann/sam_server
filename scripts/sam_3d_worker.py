@@ -1,17 +1,34 @@
-# sam_3d_worker.py
+"""3D reconstruction worker.
 
-import sys, os
+Loads the SAM-3D model once, then processes jobs after segmentation masks are
+available. It exports a PLY file for downstream conversion and a GIF preview to
+help with debugging.
+"""
 
-print("Loading SAM3D libraries and model...")
+from __future__ import annotations
 
-import os
+import time
+from pathlib import Path
+
 import imageio
-import uuid
-from IPython.display import Image as ImageDisplay
-from inference import Inference, ready_gaussian_for_video_rendering, render_video, load_image, load_single_mask, display_image, make_scene, interactive_visualizer
+from inference import (
+    Inference,
+    load_image,
+    load_single_mask,
+    make_scene,
+    ready_gaussian_for_video_rendering,
+    render_video,
+)
 
-def save_gif(model_output, output_dir, image_name):
-    # render gaussian splat
+from config import DEFAULT_SAM3D_CONFIG, RECONSTRUCTION_STAGE, WORKER_LOG_PREFIX, WORKER_POLL_SECONDS
+from job_state import claim_next_job, prerequisites_for, set_artifacts, set_stage_status
+
+
+import sys
+print("[sam3d] PYTHONPATH:", sys.path)
+
+
+def save_gif(model_output, output_dir: Path, image_name: str) -> Path:
     scene_gs = make_scene(model_output)
     scene_gs = ready_gaussian_for_video_rendering(scene_gs)
 
@@ -24,64 +41,56 @@ def save_gif(model_output, output_dir, image_name):
         resolution=512,
     )["color"]
 
-    # save video as gif
+    gif_path = output_dir / f"{image_name}.gif"
     imageio.mimsave(
-        os.path.join(f"{output_dir}/{image_name}.gif"),
+        gif_path,
         video,
         format="GIF",
-        duration=1000 / 20,  # default assuming 20fps from the input MP4
-        loop=0,  # 0 means loop indefinitely
+        duration=1000 / 20,
+        loop=0,
     )
-    
-
-PATH = "/home/ferdinand/sam_project/sam_server/sam_3d_worker"
-INPUT_DIR = os.path.join(PATH, "input")
-OUTPUT_DIR = os.path.join(PATH, "output")
-os.makedirs(INPUT_DIR, exist_ok=True)
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-config_path = "/home/ferdinand/sam_project/sam-3d-objects/checkpoints/hf/pipeline.yaml"
-
-IMAGE_PATH = f"{INPUT_DIR}/input_image.png"
+    return gif_path
 
 
-print("SAM-3D worker ready")
+def reconstruct(job_dir: Path, inference: Inference) -> None:
+    image_path = job_dir / "input.png"
+    mask_dir = job_dir / "segmentation"
+    output_dir = job_dir
+    output_dir.mkdir(exist_ok=True)
+
+    image = load_image(str(image_path), convert_rgb=True)
+    mask = load_single_mask(str(mask_dir), index=0)
+
+    model_output = inference(image, mask, seed=42)
+
+    ply_path = output_dir / "object.ply"
+    model_output["gs"].save_ply(str(ply_path))
+
+    gif_path = save_gif(model_output, output_dir, "preview")
+
+    set_artifacts(job_dir, ply=str(ply_path), reconstruction_preview=str(gif_path))
 
 
-inference = Inference(config_path, compile=False)
+def main() -> None:
+    print(f"{WORKER_LOG_PREFIX} [sam-3d] loading config from {DEFAULT_SAM3D_CONFIG}")
+    inference = Inference(DEFAULT_SAM3D_CONFIG, compile=False)
+    print(f"{WORKER_LOG_PREFIX} [sam-3d] model ready")
 
-######
+    while True:
+        job_dir = claim_next_job(RECONSTRUCTION_STAGE, prerequisites_for(RECONSTRUCTION_STAGE))
+        if not job_dir:
+            time.sleep(WORKER_POLL_SECONDS)
+            continue
 
-IMAGE_NAME = os.path.basename(os.path.dirname(IMAGE_PATH))
-image = load_image(IMAGE_PATH, convert_rgb=True)
-mask = load_single_mask(INPUT_DIR, index=0)
-# display_image(image, masks=[mask])
-
-######
-
-# run model
-model_output = inference(image, mask, seed=42)
-
-# export gaussian splat (as point cloud)
-model_output["gs"].save_ply(f"{OUTPUT_DIR}/{IMAGE_NAME}.ply")
-
-# render and save gif
-save_gif(model_output, OUTPUT_DIR, IMAGE_NAME)
-
+        try:
+            reconstruct(job_dir, inference)
+        except Exception as exc:  # noqa: BLE001 - worker needs to surface failures
+            print(f"{WORKER_LOG_PREFIX} [sam-3d] failed: {exc}")
+            set_stage_status(job_dir, RECONSTRUCTION_STAGE, "failed", error=str(exc))
+        else:
+            set_stage_status(job_dir, RECONSTRUCTION_STAGE, "done")
 
 
-
-
-while True:
-    if not os.path.exists(os.path.join(INPUT_DIR, "job.txt")):
-        time.sleep(0.1)
-        continue
-
-    with open(os.path.join(INPUT_DIR, "job.txt")) as f:
-        image_path, out_path = f.read().strip().split(",")
-
-    run_sam(image_path, out_path)
-
-    os.remove(os.path.join(INPUT_DIR, "job.txt"))
-    open(os.path.join(OUTPUT_DIR, "done.txt"), "w").close()
+if __name__ == "__main__":
+    main()
     

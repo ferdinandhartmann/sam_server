@@ -1,0 +1,20 @@
+{
+  "job_id": "354718002aae4351954703dd82cd9a66",
+  "status": {
+    "segmentation": "done",
+    "reconstruction": "done",
+    "conversion": "done"
+  },
+  "error": null,
+  "outputs": {
+    "mask": "/home/ferdinand/sam_project/sam_server/jobs/354718002aae4351954703dd82cd9a66/mask.txt",
+    "reconstruction": "/home/ferdinand/sam_project/sam_server/jobs/354718002aae4351954703dd82cd9a66/reconstruction.ply",
+    "obj": "/home/ferdinand/sam_project/sam_server/jobs/354718002aae4351954703dd82cd9a66/object.obj",
+    "stl": "/home/ferdinand/sam_project/sam_server/jobs/354718002aae4351954703dd82cd9a66/object.stl",
+    "preview": "/home/ferdinand/sam_project/sam_server/jobs/354718002aae4351954703dd82cd9a66/preview.txt"
+  },
+  "timestamps": {
+    "created_at": 1766065795.386559,
+    "updated_at": 1766065795.4158432
+  }
+}

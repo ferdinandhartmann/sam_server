@@ -1,79 +1,95 @@
+"""Mesh conversion worker.
+
+This worker loads Open3D once, then watches the shared jobs directory for
+reconstruction results. When a ``*.ply`` file becomes available it will produce
+OBJ and STL meshes for both the visual and collision representations.
+"""
+
+from __future__ import annotations
+
+import time
+from pathlib import Path
+
 import open3d as o3d
 
-PATH = "/home/ferdinand/sam_project/sam_server/converting_worker"#
-INPUT_DIR = os.path.join(PATH, "input")
-OUTPUT_DIR = os.path.join(PATH, "output")
-os.makedirs(INPUT_DIR, exist_ok=True)
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-in_ply = os.path.join(INPUT_DIR, "gaussian_splat.ply")
-out_stl_visual = os.path.join(OUTPUT_DIR, "object_visual.stl")
-out_obj_visual = os.path.join(OUTPUT_DIR, "object_visual.obj")
-out_stl_collision = os.path.join(OUTPUT_DIR, "object_collision.stl")
-out_obj_collision = os.path.join(OUTPUT_DIR, "object_collision.obj")
-
-print(f"Reading point cloud from {in_ply} ...")
-pcd = o3d.io.read_point_cloud(in_ply)
-assert not pcd.is_empty()
-print(f"Loaded point cloud with {len(pcd.points)} points.")
-
-print("Estimating normals ...")
-pcd.estimate_normals(
-    search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.03, max_nn=50)
-)
-pcd.orient_normals_consistent_tangent_plane(100)
-print("Normals estimated and oriented.")
-
-print("Running Poisson surface reconstruction ...")
-mesh, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
-    pcd, depth=9
-)
-print(f"Mesh created with {len(mesh.vertices)} vertices and {len(mesh.triangles)} triangles.")
-
-print("Cleaning mesh ...")
-mesh.remove_degenerate_triangles()
-mesh.remove_duplicated_triangles()
-mesh.remove_non_manifold_edges()
-mesh.remove_unreferenced_vertices()
-print("Mesh cleaned.")
-
-print("Simplifying mesh for visual model ...")
-visual = mesh.simplify_quadric_decimation(30000)
-print(f"Visual mesh: {len(visual.vertices)} vertices, {len(visual.triangles)} triangles.")
-
-print("Simplifying mesh for collision model ...")
-collision = mesh.simplify_quadric_decimation(3000)
-print(f"Collision mesh: {len(collision.vertices)} vertices, {len(collision.triangles)} triangles.")
-
-visual.compute_vertex_normals()
-collision.compute_vertex_normals()
-visual.compute_triangle_normals()
-collision.compute_triangle_normals()
-
-visual.paint_uniform_color([0.7, 0.7, 0.7])  # light gray
-
-print(f"Writing visual mesh to {out_stl_visual} and {out_obj_visual} ...")
-o3d.io.write_triangle_mesh(out_stl_visual, visual)
-o3d.io.write_triangle_mesh(out_obj_visual, visual)
-
-print(f"Writing collision mesh to {out_stl_collision} and {out_obj_collision} ...")
-o3d.io.write_triangle_mesh(out_stl_collision, collision)
-o3d.io.write_triangle_mesh(out_obj_collision, collision)
-
-print("OK:", len(mesh.triangles), "triangles in original mesh")
+from config import CONVERSION_STAGE, WORKER_LOG_PREFIX, WORKER_POLL_SECONDS
+from job_state import claim_next_job, prerequisites_for, set_artifacts, set_stage_status
 
 
+def convert_mesh(job_dir: Path) -> None:
+    ply_path = job_dir / "object.ply"
+    output_dir = job_dir / "meshes"
+    output_dir.mkdir(exist_ok=True)
 
-while True:
-    if not os.path.exists(os.path.join(INPUT_DIR, "job.txt")):
-        time.sleep(0.1)
-        continue
+    visual_stl = output_dir / "object_visual.stl"
+    visual_obj = output_dir / "object_visual.obj"
+    collision_stl = output_dir / "object_collision.stl"
+    collision_obj = output_dir / "object_collision.obj"
 
-    with open(os.path.join(INPUT_DIR, "job.txt")) as f:
-        image_path, out_path = f.read().strip().split(",")
+    print(f"{WORKER_LOG_PREFIX} [converter] reading point cloud from {ply_path}")
+    pcd = o3d.io.read_point_cloud(str(ply_path))
+    if pcd.is_empty():
+        raise RuntimeError("Input point cloud is empty")
 
-    run_sam(image_path, out_path)
+    print(f"{WORKER_LOG_PREFIX} [converter] estimating normals")
+    pcd.estimate_normals(
+        search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.03, max_nn=50)
+    )
+    pcd.orient_normals_consistent_tangent_plane(100)
 
-    os.remove(os.path.join(INPUT_DIR, "job.txt"))
-    open(os.path.join(OUTPUT_DIR, "done.txt"), "w").close()
+    print(f"{WORKER_LOG_PREFIX} [converter] running Poisson reconstruction")
+    mesh, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=9)
+
+    print(f"{WORKER_LOG_PREFIX} [converter] cleaning mesh")
+    mesh.remove_degenerate_triangles()
+    mesh.remove_duplicated_triangles()
+    mesh.remove_non_manifold_edges()
+    mesh.remove_unreferenced_vertices()
+
+    print(f"{WORKER_LOG_PREFIX} [converter] simplifying visual mesh")
+    visual = mesh.simplify_quadric_decimation(30000)
+    print(f"{WORKER_LOG_PREFIX} [converter] simplifying collision mesh")
+    collision = mesh.simplify_quadric_decimation(3000)
+
+    for m in (visual, collision):
+        m.compute_vertex_normals()
+        m.compute_triangle_normals()
+
+    visual.paint_uniform_color([0.7, 0.7, 0.7])
+
+    print(f"{WORKER_LOG_PREFIX} [converter] writing {visual_stl} and {visual_obj}")
+    o3d.io.write_triangle_mesh(str(visual_stl), visual)
+    o3d.io.write_triangle_mesh(str(visual_obj), visual)
+
+    print(f"{WORKER_LOG_PREFIX} [converter] writing {collision_stl} and {collision_obj}")
+    o3d.io.write_triangle_mesh(str(collision_stl), collision)
+    o3d.io.write_triangle_mesh(str(collision_obj), collision)
+
+    set_artifacts(
+        job_dir,
+        visual_stl=str(visual_stl),
+        visual_obj=str(visual_obj),
+        collision_stl=str(collision_stl),
+        collision_obj=str(collision_obj),
+    )
+
+
+def main() -> None:
+    while True:
+        job_dir = claim_next_job(CONVERSION_STAGE, prerequisites_for(CONVERSION_STAGE))
+        if not job_dir:
+            time.sleep(WORKER_POLL_SECONDS)
+            continue
+
+        try:
+            convert_mesh(job_dir)
+        except Exception as exc:  # noqa: BLE001 - surface worker error for visibility
+            print(f"{WORKER_LOG_PREFIX} [converter] failed: {exc}")
+            set_stage_status(job_dir, CONVERSION_STAGE, "failed", error=str(exc))
+        else:
+            set_stage_status(job_dir, CONVERSION_STAGE, "done")
+
+
+if __name__ == "__main__":
+    main()
     

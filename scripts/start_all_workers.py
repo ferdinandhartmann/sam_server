@@ -1,32 +1,23 @@
-import subprocess
-import signal
-import sys
+"""Helper script to start all workers without running the API server."""
 
-SAM3_PY   = "/home/ferdinand/miniforge3/envs/sam3/bin/python"
-SAM3D_PY  = "/home/ferdinand/miniforge3/envs/sam3d-objects/bin/python"
-BASE_PY   = "/home/ferdinand/miniforge3/bin/python"
-
-workers = [
-    [SAM3_PY, "sam_worker.py"],
-    [SAM3D_PY, "sam3d_worker.py"],
-    [BASE_PY, "mesh_worker.py"],
-]
+from worker_manager import WorkerManager
 
 
-procs = []
+def main() -> None:
+    manager = WorkerManager()
+    manager.start()
+    print("Workers are running. Use CTRL+C to stop.")
+    try:
+        import signal
+        import time
 
-def shutdown(sig, frame):
-    print("Shutting down workers...")
-    for p in procs:
-        p.terminate()
-    sys.exit(0)
+        signal.signal(signal.SIGINT, lambda *_: None)
+        signal.signal(signal.SIGTERM, lambda *_: None)
+        while True:
+            time.sleep(1)
+    finally:
+        manager.stop()
 
-signal.signal(signal.SIGINT, shutdown)
-signal.signal(signal.SIGTERM, shutdown)
 
-for cmd in workers:
-    print("Starting:", cmd)
-    procs.append(subprocess.Popen(cmd))
-
-print("All workers running.")
-signal.pause()
+if __name__ == "__main__":
+    main()

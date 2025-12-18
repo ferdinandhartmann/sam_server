@@ -1,0 +1,4 @@
+model: lightweight-mock-segmentation-model
+job_id: 354718002aae4351954703dd82cd9a66
+input: input.png
+sha256: ba03521ff6e5246ec057ceea206a4415aa314a162ba4e757615d97e4c301fe7a

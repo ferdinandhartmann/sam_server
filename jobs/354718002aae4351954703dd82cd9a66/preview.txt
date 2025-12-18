@@ -1,0 +1,3 @@
+job: 354718002aae4351954703dd82cd9a66
+obj: object.obj
+stl: object.stl
