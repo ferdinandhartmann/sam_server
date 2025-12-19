@@ -10,10 +10,10 @@ print("Loading libraries and model...")
 sys.path.insert(0, "/home/ferdinand/sam_project/sam-3d-objects/notebook")
 
 import time
-# import imageio
-# import uuid
-# from IPython.display import Image as ImageDisplay
-# from inference import Inference, ready_gaussian_for_video_rendering, render_video, load_image, load_single_mask, display_image, make_scene, interactive_visualizer
+import imageio
+import uuid
+from IPython.display import Image as ImageDisplay
+from inference import Inference, ready_gaussian_for_video_rendering, render_video, load_image, load_single_mask, display_image, make_scene, interactive_visualizer
 import trimesh
 
 def save_gif(model_output, output_dir, image_name):
@@ -103,29 +103,29 @@ def run_sam3d(config_path, image_path, done_dir, output_dir):
     
     print("Starting inference...")
         
-    # inference = Inference(config_path, compile=False)
+    inference = Inference(config_path, compile=False)
 
-    # ######
+    ######
 
-    # IMAGE_NAME = os.path.basename(os.path.dirname(image_path))
-    # image = load_image(image_path, convert_rgb=True)
-    # input_dir = os.path.dirname(image_path)
-    # mask = load_single_mask(input_dir, index=0)
-    # # display_image(image, masks=[mask])
+    IMAGE_NAME = os.path.basename(os.path.dirname(image_path))
+    image = load_image(image_path, convert_rgb=True)
+    input_dir = os.path.dirname(image_path)
+    mask = load_single_mask(input_dir, index=0)
+    # display_image(image, masks=[mask])
 
-    # ######
+    ######
 
-    # # run model
-    # model_output = inference(image, mask, seed=42)
+    # run model
+    model_output = inference(image, mask, seed=42)
     
-    # WITH_MESH_POSTPROCESS = True
-    # WITH_TEXTURE_BAKING = True
-    # model_output = inference._pipeline.postprocess_slat_output(
-    #     model_output,
-    #     with_mesh_postprocess=WITH_MESH_POSTPROCESS,
-    #     with_texture_baking=WITH_TEXTURE_BAKING,
-    #     use_vertex_color=not WITH_TEXTURE_BAKING,
-    # )
+    WITH_MESH_POSTPROCESS = True
+    WITH_TEXTURE_BAKING = True
+    model_output = inference._pipeline.postprocess_slat_output(
+        model_output,
+        with_mesh_postprocess=WITH_MESH_POSTPROCESS,
+        with_texture_baking=WITH_TEXTURE_BAKING,
+        use_vertex_color=not WITH_TEXTURE_BAKING,
+    )
     
     # mesh = model_output["glb"]  # trimesh object
     mesh_path = os.path.join(output_dir, "object_mesh.glb")
@@ -134,6 +134,7 @@ def run_sam3d(config_path, image_path, done_dir, output_dir):
     
     # Import and export to .obj with texture and material
     mesh = trimesh.load(mesh_path, force="mesh")
+    mesh.apply_scale(1 / 10.0)
     mesh.export(os.path.join(done_dir, "object_visual.obj"))
     print(f"Exported visual mesh")    
     
