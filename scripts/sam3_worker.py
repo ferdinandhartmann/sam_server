@@ -2,7 +2,10 @@
 
 import os, sys
 
-print("\033[92mLoading SAM3_segmentation libraries and model...\033[0m")
+from utils import ColorPrint
+print = ColorPrint(worker_name="SAM3", default_color="yellow")
+
+print("Loading libraries and model...")
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -102,7 +105,9 @@ def visualize_segmentation_results(image_path, output_dir, inference_state, colo
     print(f"Plotted results saved to {save_path}")
 
 
-def run_sam(model, image_path, output_dir, done_dir, colors):
+def run_sam(model, image_path, prompt_path, output_dir, done_dir, colors):
+    
+    print("Starting inference...")
 
     image = Image.open(image_path).convert("RGB")  # Ensure image is in RGB format
     width, height = image.size
@@ -110,7 +115,11 @@ def run_sam(model, image_path, output_dir, done_dir, colors):
     inference_state = processor.set_image(image)
 
     processor.reset_all_prompts(inference_state)
-    inference_state = processor.set_text_prompt(state=inference_state, prompt="mouse")
+    prompt = "mouse"
+    if prompt_path and os.path.exists(prompt_path):
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            prompt = f.read().strip() or prompt
+    inference_state = processor.set_text_prompt(state=inference_state, prompt=prompt)
 
     # img0 = Image.open(image_path)
     # plot_results(img0, inference_state)
@@ -135,13 +144,13 @@ done_name = "job.png"
 INPUT_DIR = os.path.join(PATH, "input")
 OUTPUT_DIR = os.path.join(PATH, "output")
 DONE_DIR = os.path.join(os.path.dirname(PATH), "sam_3d_worker", "input")
+PROMPT_PATH = os.path.join(INPUT_DIR, "prompt.txt")
 for d in [INPUT_DIR, OUTPUT_DIR, DONE_DIR]:
     os.makedirs(d, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 IMAGE_PATH = os.path.join(INPUT_DIR, job_name)
-# DONE_PATH = os.path.join(OUTPUT_DIR, done_name)
 
-print("\033[92mSam_segmentation worker ready\033[0m")
+print("Ready! Waiting for jobs...")
 
 
 while True:
@@ -150,10 +159,14 @@ while True:
         continue
 
     start_time = time.time()
-    print(f"\033[95m[SAM3_WORKER] Job started\033[0m")
-    run_sam(model, IMAGE_PATH, OUTPUT_DIR, DONE_DIR, COLORS)
+    print(f"Job started")
+    
+    run_sam(model, IMAGE_PATH, PROMPT_PATH, OUTPUT_DIR, DONE_DIR, COLORS)
+    
     elapsed_time = time.time() - start_time
-    print(f"\033[95m[SAM3_WORKER] Time taken: {elapsed_time:.2f} seconds\033[0m")
+    print(f"Job finished! ({elapsed_time:.2f})s")
 
     os.remove(IMAGE_PATH)
+    if os.path.exists(PROMPT_PATH):
+        os.remove(PROMPT_PATH)
     

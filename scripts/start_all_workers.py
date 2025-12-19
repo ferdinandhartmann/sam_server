@@ -6,28 +6,28 @@ import sys
 import shutil
 import os
 
+from utils import ColorPrint
+print = ColorPrint(worker_name="All Worker Starter", default_color="cyan")
+
+
 SAM3_PY   = "/home/ferdinand/miniforge3/envs/sam3/bin/python"
 SAM3D_PY  = "/home/ferdinand/miniforge3/envs/sam3d-objects/bin/python"
-BASE_PY   = "/home/ferdinand/miniforge3/bin/python"
 
 workers = [
     [SAM3_PY, "scripts/sam3_worker.py"],
     [SAM3D_PY, "scripts/sam_3d_worker.py"],
-    [BASE_PY, "scripts/mesh_worker.py"],
 ]
 
-folders_to_delete = [
-    "mesh_worker",
-    "sam_3d_worker",
-    "sam3_worker"
-]
-
-for folder in folders_to_delete:
-    if os.path.exists(folder):
-        print(f"Deleting folder: {folder}")
-        shutil.rmtree(folder)
-    else:
-        print(f"Folder not found: {folder}")
+# Delete all existing folders in worker_data directory
+worker_data_dir = "worker_data"
+if os.path.exists(worker_data_dir):
+    for folder in os.listdir(worker_data_dir):
+        folder_path = os.path.join(worker_data_dir, folder)
+        if os.path.isdir(folder_path):
+            print(f"Deleting folder: {folder_path}")
+            shutil.rmtree(folder_path)
+else:
+    print(f"Folder not found: {worker_data_dir}")
 
 procs = []
 

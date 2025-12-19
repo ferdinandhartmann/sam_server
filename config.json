@@ -1,0 +1,21 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "base_dir": "/home/ferdinand/sam_project/sam_server/worker_data"
+  },
+  "http_client": {
+    "server_url": "http://localhost:8000",
+    "watch_dir": "~/Google Drive/SAMJobs",
+    "used_dir": "",
+    "output_dir": "",
+    "poll_interval": 5.0
+  },
+  "ros2": {
+    "server_url": "http://localhost:8000",
+    "watch_dir": "~/Google Drive/SAMJobs",
+    "used_dir": "",
+    "output_dir": "",
+    "poll_interval": 5.0
+  }
+}
