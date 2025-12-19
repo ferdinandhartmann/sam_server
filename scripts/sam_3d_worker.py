@@ -10,10 +10,10 @@ print("Loading libraries and model...")
 sys.path.insert(0, "/home/ferdinand/sam_project/sam-3d-objects/notebook")
 
 import time
-import imageio
-import uuid
-from IPython.display import Image as ImageDisplay
-from inference import Inference, ready_gaussian_for_video_rendering, render_video, load_image, load_single_mask, display_image, make_scene, interactive_visualizer
+# import imageio
+# import uuid
+# from IPython.display import Image as ImageDisplay
+# from inference import Inference, ready_gaussian_for_video_rendering, render_video, load_image, load_single_mask, display_image, make_scene, interactive_visualizer
 import trimesh
 
 def save_gif(model_output, output_dir, image_name):
@@ -89,9 +89,10 @@ def create_voxel_collision_mesh(mesh, voxel_scale=64.0):
     
     return collision
 
-def create_convex_hull_mesh(mesh):
-    convexhull = mesh.copy()
-    convexhull = mesh.convex_hull
+def create_convex_hull_mesh(mesh, reduce_percent=0.9):
+    # Simplify mesh to reduce number of faces
+    simplified_mesh = mesh.simplify_quadric_decimation(reduce_percent)
+    convexhull = simplified_mesh.convex_hull
     convexhull = clean_mesh(convexhull)
     convexhull = rescale_to_match(mesh, convexhull)
     print(f"Convex hull mesh has {len(convexhull.faces)} faces")
@@ -102,34 +103,34 @@ def run_sam3d(config_path, image_path, done_dir, output_dir):
     
     print("Starting inference...")
         
-    inference = Inference(config_path, compile=False)
+    # inference = Inference(config_path, compile=False)
 
-    ######
+    # ######
 
-    IMAGE_NAME = os.path.basename(os.path.dirname(image_path))
-    image = load_image(image_path, convert_rgb=True)
-    input_dir = os.path.dirname(image_path)
-    mask = load_single_mask(input_dir, index=0)
-    # display_image(image, masks=[mask])
+    # IMAGE_NAME = os.path.basename(os.path.dirname(image_path))
+    # image = load_image(image_path, convert_rgb=True)
+    # input_dir = os.path.dirname(image_path)
+    # mask = load_single_mask(input_dir, index=0)
+    # # display_image(image, masks=[mask])
 
-    ######
+    # ######
 
-    # run model
-    model_output = inference(image, mask, seed=42)
+    # # run model
+    # model_output = inference(image, mask, seed=42)
     
-    WITH_MESH_POSTPROCESS = True
-    WITH_TEXTURE_BAKING = True
-    model_output = inference._pipeline.postprocess_slat_output(
-        model_output,
-        with_mesh_postprocess=WITH_MESH_POSTPROCESS,
-        with_texture_baking=WITH_TEXTURE_BAKING,
-        use_vertex_color=not WITH_TEXTURE_BAKING,
-    )
+    # WITH_MESH_POSTPROCESS = True
+    # WITH_TEXTURE_BAKING = True
+    # model_output = inference._pipeline.postprocess_slat_output(
+    #     model_output,
+    #     with_mesh_postprocess=WITH_MESH_POSTPROCESS,
+    #     with_texture_baking=WITH_TEXTURE_BAKING,
+    #     use_vertex_color=not WITH_TEXTURE_BAKING,
+    # )
     
-    mesh = model_output["glb"]  # trimesh object
+    # mesh = model_output["glb"]  # trimesh object
     mesh_path = os.path.join(output_dir, "object_mesh.glb")
-    mesh.export(mesh_path)
-    print(f"Exported .glb mesh")
+    # mesh.export(mesh_path)
+    # print(f"Exported .glb mesh")
     
     # Import and export to .obj with texture and material
     mesh = trimesh.load(mesh_path, force="mesh")
@@ -142,7 +143,7 @@ def run_sam3d(config_path, image_path, done_dir, output_dir):
     print(f"Mesh has {len(mesh.faces)} faces")
         
     # create convex hull
-    create_convex_hull_mesh(mesh).export(os.path.join(done_dir, "object_collision.obj"))    
+    create_convex_hull_mesh(mesh, reduce_percent=0.93).export(os.path.join(done_dir, "object_collision.obj"))    
     print(f"Exported convex hull collision mesh")
     
     # # create voxel-based watertight collision mesh
@@ -190,4 +191,3 @@ while True:
         file_path = os.path.join(INPUT_DIR, f)
         if os.path.isfile(file_path):
             os.remove(file_path)
-    
