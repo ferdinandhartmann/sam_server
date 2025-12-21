@@ -78,7 +78,7 @@ def plot_mask(mask, color="r", ax=None):
         ax = plt.gca()
     ax.imshow(mask_img)
     
-def visualize_segmentation_results(image_path, output_dir, inference_state, colors):
+def visualize_segmentation_results(image_path, output_dir, inference_state, colors, safe_prompt):
     plt.figure(figsize=(12, 8))
     img = Image.open(image_path)
     plt.imshow(img)
@@ -100,12 +100,12 @@ def visualize_segmentation_results(image_path, output_dir, inference_state, colo
             relative_coords=False,
         )
     plt.tight_layout()
-    save_path = os.path.join(output_dir, "segmentation_results.png")
+    save_path = os.path.join(output_dir, f"{safe_prompt}_segmentation_results.png")
     plt.savefig(save_path)
     print(f"Plotted results saved to {save_path}")
 
 
-def run_sam(model, image_path, prompt_path, output_dir, done_dir, colors):
+def run_sam(model, image_path, prompt_path, output_dir, done_dir, colors, final_output_dir):
     
     print("Starting inference...")
 
@@ -115,10 +115,13 @@ def run_sam(model, image_path, prompt_path, output_dir, done_dir, colors):
     inference_state = processor.set_image(image)
 
     processor.reset_all_prompts(inference_state)
-    prompt = "mouse"
+    prompt = "object"
     if prompt_path and os.path.exists(prompt_path):
         with open(prompt_path, "r", encoding="utf-8") as f:
             prompt = f.read().strip() or prompt
+        print(f"Using prompt from file: \"{prompt}\".")
+    else:
+        print(f"! No prompt file found at {prompt_path}, using default prompt \"{prompt}\".")
     inference_state = processor.set_text_prompt(state=inference_state, prompt=prompt)
 
     # img0 = Image.open(image_path)
@@ -127,10 +130,14 @@ def run_sam(model, image_path, prompt_path, output_dir, done_dir, colors):
     img_np = np.array(image)
     save_masks_as_pngs(inference_state, done_dir, img_np)
     # Save the raw image in the done_dir
-    raw_img_save_path = os.path.join(done_dir, "job.png")
+    # Sanitize prompt to create a valid filename
+    safe_prompt = "".join(c if c.isalnum() or c in ('_', '-') else '_' for c in prompt.lower())
+    safe_prompt = safe_prompt.replace(' ', '_').strip('_')
+    raw_img_save_path = os.path.join(done_dir, f"{safe_prompt}.png")
     image.save(raw_img_save_path)
+    print(f"Saved raw image to {raw_img_save_path}")
 
-    visualize_segmentation_results(image_path, output_dir, inference_state, colors)
+    visualize_segmentation_results(image_path, final_output_dir, inference_state, colors, safe_prompt)
 
 #######
 
@@ -139,17 +146,20 @@ COLORS = generate_colors(n_colors=128, n_samples=5000)
 model = build_sam3_image_model()
 
 PATH = "/home/ferdinand/sam_project/sam_server/worker_data/sam3_worker"
-job_name = "job.png"
-done_name = "job.png"
+job_name = "job.jpg"
 INPUT_DIR = os.path.join(PATH, "input")
 OUTPUT_DIR = os.path.join(PATH, "output")
 DONE_DIR = os.path.join(os.path.dirname(PATH), "sam_3d_worker", "input")
+READY_DIR = os.path.join(os.path.dirname(PATH), "workers_ready")
 PROMPT_PATH = os.path.join(INPUT_DIR, "prompt.txt")
-for d in [INPUT_DIR, OUTPUT_DIR, DONE_DIR]:
+FINAL_OUTPUT_DIR = os.path.join(os.path.dirname(PATH), "final_output")
+for d in [INPUT_DIR, OUTPUT_DIR, DONE_DIR, READY_DIR]:
     os.makedirs(d, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 IMAGE_PATH = os.path.join(INPUT_DIR, job_name)
 
+
+open(os.path.join(READY_DIR, "sam3_worker.ready"), "a").close()
 print("Ready! Waiting for jobs...")
 
 
@@ -161,10 +171,16 @@ while True:
     start_time = time.time()
     print(f"Job started")
     
-    run_sam(model, IMAGE_PATH, PROMPT_PATH, OUTPUT_DIR, DONE_DIR, COLORS)
+    done_flag_path = os.path.join(OUTPUT_DIR, "done.flag")
+    if os.path.exists(done_flag_path):
+        os.remove(done_flag_path)
+    
+    run_sam(model, IMAGE_PATH, PROMPT_PATH, OUTPUT_DIR, DONE_DIR, COLORS, FINAL_OUTPUT_DIR)
     
     elapsed_time = time.time() - start_time
     print(f"Job finished! ({elapsed_time:.2f})s")
+    
+    # open(os.path.join(OUTPUT_DIR, "done.flag"), "a").close()
 
     os.remove(IMAGE_PATH)
     if os.path.exists(PROMPT_PATH):

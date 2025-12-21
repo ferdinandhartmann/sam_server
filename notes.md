@@ -1,6 +1,3 @@
-uvicorn server.server:app --host 0.0.0.0 --port 8000
-
-
 https://qiita.com/takusandayo/items/55ed52f9298064d7cf61
 
 pip install git+https://github.com/NVlabs/nvdiffrast.git --no-build-isolation

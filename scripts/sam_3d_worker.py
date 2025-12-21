@@ -26,10 +26,11 @@ def save_gif(model_output, output_dir, image_name):
         r=1,
         fov=60,
         pitch_deg=15,
-        yaw_start_deg=-45,
-        resolution=512,
+        yaw_start_deg=45,
+        resolution=256,
+        bg_color=(180, 180, 180)
     )["color"]
-
+    
     # save video as gif
     imageio.mimsave(
         os.path.join(f"{output_dir}/{image_name}.gif"),
@@ -99,7 +100,7 @@ def create_convex_hull_mesh(mesh, reduce_percent=0.9):
     return convexhull
 
 
-def run_sam3d(config_path, image_path, done_dir, output_dir):
+def run_sam3d(config_path, image_path, done_dir, output_dir, prompt):
     
     print("Starting inference...")
         
@@ -127,24 +128,36 @@ def run_sam3d(config_path, image_path, done_dir, output_dir):
         use_vertex_color=not WITH_TEXTURE_BAKING,
     )
     
-    # mesh = model_output["glb"]  # trimesh object
-    mesh_path = os.path.join(output_dir, "object_mesh.glb")
-    # mesh.export(mesh_path)
-    # print(f"Exported .glb mesh")
+    mesh = model_output["glb"]  # trimesh object
+    mesh_path = os.path.join(output_dir, f"{prompt}_mesh.glb")
+    mesh.export(mesh_path)
+    print(f"Exported .glb mesh")
     
     # Import and export to .obj with texture and material
     mesh = trimesh.load(mesh_path, force="mesh")
     mesh.apply_scale(1 / 10.0)
-    mesh.export(os.path.join(done_dir, "object_visual.obj"))
-    print(f"Exported visual mesh")    
-    
+    # Rename material and texture if present
+    if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'material'):
+        mesh.visual.material.name = f"{prompt}_material"
+        if hasattr(mesh.visual.material, 'image') and mesh.visual.material.image is not None:
+            texture_path = os.path.join(done_dir, f"{prompt}_texture.png")
+            imageio.imwrite(texture_path, mesh.visual.material.image)
+            mesh.visual.material.image = texture_path
+    mesh.export(os.path.join(done_dir, f"{prompt}_visual.obj"))
+    # Rename automatically generated MTL
+    auto_mtl_path = os.path.join(done_dir, f"material.mtl")
+    desired_mtl_path = os.path.join(done_dir, f"{prompt}_material.mtl")
+    if os.path.exists(auto_mtl_path):
+        os.rename(auto_mtl_path, desired_mtl_path)
+    print(f"Exported visual mesh")
+        
     # Ensure mesh is a single unified mesh
     if isinstance(mesh, trimesh.Scene):
         mesh = trimesh.util.concatenate(mesh.dump())
     print(f"Mesh has {len(mesh.faces)} faces")
         
     # create convex hull
-    create_convex_hull_mesh(mesh, reduce_percent=0.93).export(os.path.join(done_dir, "object_collision.obj"))    
+    create_convex_hull_mesh(mesh, reduce_percent=0.93).export(os.path.join(done_dir, f"{prompt}_collision.obj"))    
     print(f"Exported convex hull collision mesh")
     
     # # create voxel-based watertight collision mesh
@@ -152,8 +165,8 @@ def run_sam3d(config_path, image_path, done_dir, output_dir):
 
 
     # export gaussian splat (as point cloud) and gif visualization
-    model_output["gs"].save_ply(f"{output_dir}/gsplat.ply")
-    save_gif(model_output, output_dir, "splatting_visualization")
+    model_output["gs"].save_ply(f"{output_dir}/{prompt}_gsplat.ply")
+    save_gif(model_output, done_dir, f"{prompt}_3d_visualization")
     print(f"Exported gaussian splat and gif visualization")
 
 
@@ -161,31 +174,48 @@ def run_sam3d(config_path, image_path, done_dir, output_dir):
 config_path = "/home/ferdinand/sam_project/sam-3d-objects/checkpoints/hf/pipeline.yaml"
 
 PATH = "/home/ferdinand/sam_project/sam_server/worker_data/sam_3d_worker"
-job_name = "job.png"
 INPUT_DIR = os.path.join(PATH, "input")
 OUTPUT_DIR = os.path.join(PATH, "output")
 DONE_DIR = os.path.join(os.path.dirname(PATH), "final_output")
-for d in [INPUT_DIR, OUTPUT_DIR, DONE_DIR]:
+READY_DIR = os.path.join(os.path.dirname(PATH), "workers_ready")
+for d in [INPUT_DIR, OUTPUT_DIR, DONE_DIR, READY_DIR]:
     os.makedirs(d, exist_ok=True)
 os.makedirs(INPUT_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-IMAGE_PATH = os.path.join(INPUT_DIR, job_name)
+PROMPT_NAME = "object"
 
+open(os.path.join(READY_DIR, "sam_3d_worker.ready"), "a").close()
 print("Ready! Waiting for jobs...")
 
 
 while True:
-    if not os.path.exists(IMAGE_PATH):
+    # Check if there is any .png image in the input directory
+    png_full_image_files = [f for f in os.listdir(INPUT_DIR) if f.lower().endswith('.png') and len(os.path.splitext(f)[0]) > 2]
+    if not png_full_image_files:
         time.sleep(0.1)
         continue
+    
+    png_files = [f for f in os.listdir(INPUT_DIR) if f.lower().endswith('.png')]
+    # Take the .png file with the longest name
+    IMAGE_FILENAME = max(png_files, key=lambda f: len(os.path.splitext(f)[0]))
+    IMAGE_PATH = os.path.join(INPUT_DIR, IMAGE_FILENAME)
+    # Extract prompt name from image filename (e.g., "promptname.png" -> "promptname")
+    PROMPT_NAME = os.path.splitext(IMAGE_FILENAME)[0]
+    print(f"Prompt name: {PROMPT_NAME}")
 
     start_time = time.time()
     print(f"Job started")
     
-    run_sam3d(config_path, IMAGE_PATH, DONE_DIR, OUTPUT_DIR)
+    done_flag_path = os.path.join(OUTPUT_DIR, "done.flag")
+    if os.path.exists(done_flag_path):
+        os.remove(done_flag_path)
+    
+    run_sam3d(config_path, IMAGE_PATH, DONE_DIR, OUTPUT_DIR, PROMPT_NAME)
     
     elapsed_time = time.time() - start_time
     print(f"Job finished! ({elapsed_time:.2f})s")
+    
+    open(os.path.join(OUTPUT_DIR, "done.flag"), "a").close()
     
     # Remove all files in the input folder
     for f in os.listdir(INPUT_DIR):

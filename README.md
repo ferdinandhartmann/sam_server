@@ -1,56 +1,66 @@
 # SAM Server
 
-This repository provides a lightweight HTTP server that orchestrates the existing SAM3 → SAM-3D → mesh workers, plus clients for sending jobs from a laptop (standalone Python and ROS2).
+The SAM Server is a FastAPI-based application designed to manage and process 3D object-related tasks. It supports worker processes for handling jobs and provides endpoints for job submission, status checking, and downloading results.
 
-## Server
+## Getting Started
 
-Start the orchestrator (it will launch the worker supervisor script automatically):
+### Manual Worker Start
+1. Navigate to the project directory:
+    ```bash
+    cd ~/sam_project/sam_server
+    ```
+2. Activate the conda environment:
+    ```bash
+    conda activate sam_server
+    ```
+3. Start all workers manually:
+    ```bash
+    python3 scripts/start_all_workers.py
+    ```
+4. Place the input image and a prompt .txt file with the same base name as the image (containing the prompt) into:
+    ```
+    worker_data/sam_3d_worker/input/
+    ```
 
-```bash
-python scripts/sam_server.py --config config.json
-```
+### Running the Server
+1. Navigate to the project directory:
+    ```bash
+    cd ~/sam_project/sam_server
+    ```
+2. Activate the conda environment:
+    ```bash
+    conda activate sam_server
+    ```
+3. Start the server using the provided script:
+   ```bash
+   ./scripts/start_sam_server.sh
+   ```
+4. Access the server at `http://0.0.0.0:8000`.
 
-Configuration lives in `config.json` (see `config.example.json` for defaults) and supports overrides for the server bind host/port and worker data directory. CLI flags take precedence over config values.
+## API Endpoints
 
-`config.json` sections:
+### `/ready`
+- **Description**: Check if all workers are ready.
+- **Method**: `GET`
 
-- `server`: `host`, `port`, `base_dir` for the worker data hierarchy.
-- `http_client`: defaults for `server_url`, optional `watch_dir`, `used_dir`, `output_dir`, and `poll_interval` when monitoring a Google Drive folder.
-- `ros2`: the same client defaults applied to the ROS2 node (can still be overridden with `--ros-args`).
+### `/submit`
+- **Description**: Submit a job with an image and prompt.
+- **Method**: `POST`
 
-API endpoints:
+### `/status/{job_id}`
+- **Description**: Check the status of a submitted job.
+- **Method**: `GET`
 
-- `POST /job` — multipart form with fields `image` (PNG) and `prompt` (text). Returns a `job_id`.
-- `GET /status/<job_id>` — returns JSON progress (`received`, `sam3`, `sam3d`, `meshing`, `finished`).
-- `GET /result/<job_id>` — downloads a ZIP containing the generated `job.ply`, `object_visual.obj`, and `object_collision.obj`.
+### `/download/{job_id}/{filename}`
+- **Description**: Download the result of a completed job.
+- **Method**: `GET`
 
-Artifacts for each job are stored under `server_jobs/<job_id>`.
+### `/health`
+- **Description**: Perform a health check on the server.
+- **Method**: `GET`
 
-## Standalone Python client
+## Directory Structure
+- `scripts/`: Contains server and worker scripts.
+- `worker_data/`: Stores input, output, and intermediate files for workers.
+- `README.md`: Documentation for the SAM Server.
 
-Submit a single image + prompt:
-
-```bash
-python scripts/sam_http_client.py --config config.json --image /path/to/job.png --prompt "a coffee mug"
-```
-
-Watch a Google Drive-synced folder for new `*.png` + matching `*.txt` prompt files (processed inputs are moved to a `used/` subfolder):
-
-```bash
-python scripts/sam_http_client.py --config config.json --watch "~/Google Drive/SAMJobs"
-```
-
-Results are unpacked into `results/` inside the watched folder (or a custom `--output` directory).
-
-## ROS2 drive-watcher node
-
-The ROS2 node mirrors the standalone client behaviour using ROS parameters:
-
-```bash
-ros2 run <your_package> sam_ros2_client.py --config /path/to/config.json --ros-args \
-  -p server_url:=http://<server>:8000 \
-  -p watch_dir:=/path/to/GoogleDrive/SAMJobs \
-  -p poll_interval:=5.0
-```
-
-Processed inputs are archived under `used/` and artifacts are stored under `results/` inside the watch directory by default.

@@ -1,21 +1,3 @@
-"""Shared configuration loader for SAM server and clients."""
-
-import json
-from pathlib import Path
-from typing import Any, Dict
-
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
-
-def load_config(config_path: str | Path | None = None) -> Dict[str, Any]:
-    """Load a JSON config file if it exists, otherwise return an empty dict."""
-    path = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
-    if not path.exists():
-        return {}
-    with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-
 import builtins
 from datetime import datetime
 
@@ -30,6 +12,7 @@ class ColorPrint:
         "cyan": "\033[96m",
         "white": "\033[97m",
         "orange": "\033[38;5;208m",
+        "purple": "\033[38;5;135m",
     }
 
     def __init__(self, worker_name="WORKER", default_color="cyan"):
