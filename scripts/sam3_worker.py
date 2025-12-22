@@ -124,8 +124,13 @@ def run_sam(model, image_path, prompt_path, output_dir, done_dir, colors, final_
         print(f"! No prompt file found at {prompt_path}, using default prompt \"{prompt}\".")
     inference_state = processor.set_text_prompt(state=inference_state, prompt=prompt)
 
-    # img0 = Image.open(image_path)
-    # plot_results(img0, inference_state)
+    # check if there are masks detected
+    if len(inference_state["masks"]) == 0:
+        print("No masks detected!!!!, skipping saving masks and visualization.")
+        open(os.path.join(os.path.dirname(done_dir), "sam3_nomaskdetected.flag"), "a").close()
+        return
+    
+    print(f"Detected {len(inference_state['masks'])} masks, saving masks and visualization...")
 
     img_np = np.array(image)
     save_masks_as_pngs(inference_state, done_dir, img_np)
@@ -138,6 +143,7 @@ def run_sam(model, image_path, prompt_path, output_dir, done_dir, colors, final_
     print(f"Saved raw image to {raw_img_save_path}")
 
     visualize_segmentation_results(image_path, final_output_dir, inference_state, colors, safe_prompt)
+    print("Visualization complete.")
 
 #######
 
@@ -145,17 +151,19 @@ COLORS = generate_colors(n_colors=128, n_samples=5000)
 
 model = build_sam3_image_model()
 
+def create_all_folders():
+    for d in [INPUT_DIR, OUTPUT_DIR, DONE_DIR, READY_DIR]:
+        os.makedirs(d, exist_ok=True)
+
 PATH = "/home/ferdinand/sam_project/sam_server/worker_data/sam3_worker"
 job_name = "job.jpg"
 INPUT_DIR = os.path.join(PATH, "input")
 OUTPUT_DIR = os.path.join(PATH, "output")
 DONE_DIR = os.path.join(os.path.dirname(PATH), "sam_3d_worker", "input")
 READY_DIR = os.path.join(os.path.dirname(PATH), "workers_ready")
+create_all_folders()
 PROMPT_PATH = os.path.join(INPUT_DIR, "prompt.txt")
 FINAL_OUTPUT_DIR = os.path.join(os.path.dirname(PATH), "final_output")
-for d in [INPUT_DIR, OUTPUT_DIR, DONE_DIR, READY_DIR]:
-    os.makedirs(d, exist_ok=True)
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 IMAGE_PATH = os.path.join(INPUT_DIR, job_name)
 
 
@@ -164,6 +172,11 @@ print("Ready! Waiting for jobs...")
 
 
 while True:
+    if( not os.path.exists(INPUT_DIR) ):
+        create_all_folders()
+        time.sleep(0.1)
+        continue
+    
     if not os.path.exists(IMAGE_PATH):
         time.sleep(0.1)
         continue

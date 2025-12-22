@@ -52,3 +52,4 @@ coverage.xml
 cover/
 
 worker_data/
+worker_data_finished/

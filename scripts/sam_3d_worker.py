@@ -28,7 +28,7 @@ def save_gif(model_output, output_dir, image_name):
         pitch_deg=15,
         yaw_start_deg=45,
         resolution=256,
-        bg_color=(180, 180, 180)
+        bg_color=(50, 50, 50)
     )["color"]
     
     # save video as gif
@@ -99,6 +99,21 @@ def create_convex_hull_mesh(mesh, reduce_percent=0.9):
     print(f"Convex hull mesh has {len(convexhull.faces)} faces")
     return convexhull
 
+def make_mujoco_safe(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    mesh = mesh.copy()
+
+    # Remove degenerate faces
+    mask = mesh.nondegenerate_faces()
+    if mask is not None:
+        mesh = mesh.submesh([mask], append=True)
+
+    # THIS IS CRITICAL
+    mesh.remove_unreferenced_vertices()
+
+    # Force clean reindex
+    mesh.process(validate=True)
+
+    return mesh
 
 def run_sam3d(config_path, image_path, done_dir, output_dir, prompt):
     
@@ -134,7 +149,9 @@ def run_sam3d(config_path, image_path, done_dir, output_dir, prompt):
     print(f"Exported .glb mesh")
     
     # Import and export to .obj with texture and material
-    mesh = trimesh.load(mesh_path, force="mesh")
+    # mesh = trimesh.load(mesh_path, force="mesh")
+    mesh = model_output["glb"].copy()
+    mesh = make_mujoco_safe(mesh)
     mesh.apply_scale(1 / 10.0)
     # Rename material and texture if present
     if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'material'):
@@ -170,7 +187,11 @@ def run_sam3d(config_path, image_path, done_dir, output_dir, prompt):
     print(f"Exported gaussian splat and gif visualization")
 
 
+def create_all_folders():
+    for d in [INPUT_DIR, OUTPUT_DIR, DONE_DIR, READY_DIR]:
+        os.makedirs(d, exist_ok=True)
 
+                
 config_path = "/home/ferdinand/sam_project/sam-3d-objects/checkpoints/hf/pipeline.yaml"
 
 PATH = "/home/ferdinand/sam_project/sam_server/worker_data/sam_3d_worker"
@@ -178,10 +199,7 @@ INPUT_DIR = os.path.join(PATH, "input")
 OUTPUT_DIR = os.path.join(PATH, "output")
 DONE_DIR = os.path.join(os.path.dirname(PATH), "final_output")
 READY_DIR = os.path.join(os.path.dirname(PATH), "workers_ready")
-for d in [INPUT_DIR, OUTPUT_DIR, DONE_DIR, READY_DIR]:
-    os.makedirs(d, exist_ok=True)
-os.makedirs(INPUT_DIR, exist_ok=True)
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+create_all_folders()
 PROMPT_NAME = "object"
 
 open(os.path.join(READY_DIR, "sam_3d_worker.ready"), "a").close()
@@ -189,6 +207,10 @@ print("Ready! Waiting for jobs...")
 
 
 while True:
+    if( not os.path.exists(INPUT_DIR) ):
+        create_all_folders()
+        time.sleep(0.1)
+        continue
     # Check if there is any .png image in the input directory
     png_full_image_files = [f for f in os.listdir(INPUT_DIR) if f.lower().endswith('.png') and len(os.path.splitext(f)[0]) > 2]
     if not png_full_image_files:

@@ -7,6 +7,7 @@ import time
 import threading
 import os
 from fastapi.responses import FileResponse
+from collections import defaultdict
 
 from scripts.utils import ColorPrint
 print = ColorPrint(worker_name="SAM_SERVER", default_color="magenta")
@@ -14,6 +15,10 @@ print = ColorPrint(worker_name="SAM_SERVER", default_color="magenta")
 READY_DIR = Path("worker_data/workers_ready")
 JOBS = Path("worker_data")
 JOBS.mkdir(exist_ok=True)
+old_job_id = None
+
+# Track downloaded files for each job
+job_download_tracker = defaultdict(set)
 
 def delete_worker_data():
     worker_data_dir = "worker_data"
@@ -54,6 +59,33 @@ def ready():
     return {"ready": ready}
 
 
+def archive_and_clear_worker_data(prompt_name):
+    worker_data_dir = Path("worker_data")
+    archive_dir = Path(f"worker_data_finished/worker_data_{prompt_name}")
+
+    if worker_data_dir.exists():
+        # Create the archive directory
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Copy worker_data to the archive directory
+        shutil.copytree(worker_data_dir, archive_dir, dirs_exist_ok=True)
+        print(f"Archived worker data to {archive_dir}")
+
+        # Clear the worker_data directory
+        for folder in worker_data_dir.iterdir():
+            if folder.is_dir():
+                shutil.rmtree(folder)
+            else:
+                folder.unlink()
+        
+        READY_DIR = Path("worker_data/workers_ready")
+        READY_DIR.mkdir(exist_ok=True)
+        
+        print("Cleared worker_data directory.")
+        
+    else:
+        print("worker_data directory does not exist.")
+
 @app.post("/submit")
 async def submit(image: UploadFile, prompt: str = Form(...)):
     if not all(
@@ -62,6 +94,9 @@ async def submit(image: UploadFile, prompt: str = Form(...)):
     ):
         print("Workers not ready, rejecting job submission.")
         raise HTTPException(503, "Workers not ready")
+    
+    if old_job_id is not None:
+        archive_and_clear_worker_data(old_job_id)
 
     job_id = str(uuid.uuid4())
     job_dir = JOBS / "sam3_worker/input"
@@ -82,8 +117,12 @@ def status(job_id: str):
     if (out / "done.flag").exists():
         print(f"Job {job_id} is done.")
         return {"status": "done"}
-    print(f"Job {job_id} is still processing.")
-    return {"status": "processing"}
+    elif (out / "sam3_nomaskdetected.flag").exists():
+        print(f"Job {job_id} completed with no masks detected.")
+        return {"status": "no_masks_detected"}
+    else:
+        print(f"Job {job_id} is still processing.")
+        return {"status": "processing"}
 
 @app.get("/download/{job_id}/{filename}")
 def download(job_id: str, filename: str):
@@ -91,6 +130,28 @@ def download(job_id: str, filename: str):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found")  
     print(f"Download requested for job {job_id}, file {filename}")
+
+    # Track the downloaded file
+    job_download_tracker[job_id].add(filename)
+
+    # Check if all files for the job have been downloaded
+    job_output = JOBS / "final_output"
+    all_files = {f.name for f in job_output.iterdir() if f.is_file()}
+    if job_download_tracker[job_id] == all_files:
+        print(f"All files for job {job_id} have been downloaded.")
+        old_job_id = job_id
+        # remove the done flag so the job no longer reports as done
+        done_flag = JOBS / "sam_3d_worker/output" / "done.flag"
+        if done_flag.exists():
+            done_flag.unlink()
+            print(f"Removed done.flag for job {job_id}")
+
+        # set module-level old_job_id for later archiving (avoid 'global' after assignment)
+        globals()['old_job_id'] = job_id
+
+        # cleanup download tracker for this job
+        job_download_tracker.pop(job_id, None)
+
     return FileResponse(path=file_path, filename=filename)
 
 @app.get("/list/{job_id}")
