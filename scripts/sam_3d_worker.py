@@ -15,6 +15,15 @@ import uuid
 from IPython.display import Image as ImageDisplay
 from inference import Inference, ready_gaussian_for_video_rendering, render_video, load_image, load_single_mask, display_image, make_scene, interactive_visualizer
 import trimesh
+import torch
+from torchvision.transforms.functional import resize
+from torchvision.transforms import InterpolationMode
+
+import numpy as np
+
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+torch._inductor.config.max_autotune = False
 
 def save_gif(model_output, output_dir, image_name):
     # render gaussian splat
@@ -115,24 +124,55 @@ def make_mujoco_safe(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
 
     return mesh
 
-def run_sam3d(config_path, image_path, done_dir, output_dir, prompt):
+def resize_image_np(image_np: np.ndarray, size=(512, 512)) -> np.ndarray:
+    pil = Image.fromarray(image_np)
+    pil = pil.resize(size, resample=Image.BILINEAR)
+    return np.array(pil, dtype=np.uint8)
+
+from PIL import Image
+
+def safe_load_rgb(path: str) -> np.ndarray:
+    with Image.open(path) as img:
+        img.verify()
+    return np.array(Image.open(path).convert("RGB"), dtype=np.uint8)
+
+def safe_load_mask(path: str) -> np.ndarray:
+    with Image.open(path) as img:
+        img.verify()
+    mask = np.array(Image.open(path), dtype=np.uint8)
+    if mask.ndim == 3:
+        mask = mask[..., 0]
+    return mask > 0
+
+
+def run_sam3d(inference, image_path, done_dir, output_dir, prompt):
     
     print("Starting inference...")
-        
-    inference = Inference(config_path, compile=False)
-
-    ######
 
     IMAGE_NAME = os.path.basename(os.path.dirname(image_path))
-    image = load_image(image_path, convert_rgb=True)
+    image = safe_load_rgb(image_path)
     input_dir = os.path.dirname(image_path)
-    mask = load_single_mask(input_dir, index=0)
+    mask_path = os.path.join(input_dir, "0.png")
+    mask = safe_load_mask(mask_path)
     # display_image(image, masks=[mask])
 
     ######
+    
+# --- RESIZE (NumPy) ---
+    image = resize_image_np(image, (512, 512))
 
-    # run model
-    model_output = inference(image, mask, seed=42)
+    pil_mask = Image.fromarray(mask.astype(np.uint8) * 255)
+    pil_mask = pil_mask.resize((512, 512), resample=Image.NEAREST)
+    mask = np.array(pil_mask) > 0
+
+    # --- FINAL TYPES ---
+    assert image.dtype == np.uint8
+    assert mask.dtype == np.bool_
+
+    # --- INFERENCE ---
+    with torch.inference_mode():
+        model_output = inference(image, mask, seed=42)    
+
     
     WITH_MESH_POSTPROCESS = True
     WITH_TEXTURE_BAKING = True
@@ -142,6 +182,8 @@ def run_sam3d(config_path, image_path, done_dir, output_dir, prompt):
         with_texture_baking=WITH_TEXTURE_BAKING,
         use_vertex_color=not WITH_TEXTURE_BAKING,
     )
+    
+    print("INFERENCE COMPLETE!, exporting outputs...")
     
     mesh = model_output["glb"]  # trimesh object
     mesh_path = os.path.join(output_dir, f"{prompt}_mesh.glb")
@@ -194,6 +236,18 @@ def create_all_folders():
                 
 config_path = "/home/ferdinand/sam_project/sam-3d-objects/checkpoints/hf/pipeline.yaml"
 
+inference = Inference(config_path, compile=True)
+
+# dummy_image = "/home/ferdinand/sam_project/dummy_input/dummy_input.png"
+# dummy_image = load_image(dummy_image, convert_rgb=True)
+# dummy_image = resize(dummy_image, (512, 512))
+# dummy_mask = "/home/ferdinand/sam_project/dummy_input/0.png"
+# dummy_mask = load_single_mask(os.path.dirname(dummy_mask), index=0)
+# dummy_mask = resize(dummy_mask.to(torch.uint8), (512, 512), interpolation=InterpolationMode.NEAREST).bool()
+# with torch.inference_mode(), torch.autocast("cuda", enabled=False):
+#     inference(dummy_image, dummy_mask)
+
+
 PATH = "/home/ferdinand/sam_project/sam_server/worker_data/sam_3d_worker"
 INPUT_DIR = os.path.join(PATH, "input")
 OUTPUT_DIR = os.path.join(PATH, "output")
@@ -201,6 +255,7 @@ DONE_DIR = os.path.join(os.path.dirname(PATH), "final_output")
 READY_DIR = os.path.join(os.path.dirname(PATH), "workers_ready")
 create_all_folders()
 PROMPT_NAME = "object"
+sam3_finished_flag_path = os.path.join(INPUT_DIR, "sam3_worker_finished.flag")
 
 open(os.path.join(READY_DIR, "sam_3d_worker.ready"), "a").close()
 print("Ready! Waiting for jobs...")
@@ -212,11 +267,16 @@ while True:
         time.sleep(0.1)
         continue
     # Check if there is any .png image in the input directory
-    png_full_image_files = [f for f in os.listdir(INPUT_DIR) if f.lower().endswith('.png') and len(os.path.splitext(f)[0]) > 2]
-    if not png_full_image_files:
+    # png_full_image_files = [f for f in os.listdir(INPUT_DIR) if f.lower().endswith('.png') and len(os.path.splitext(f)[0]) > 2]
+    # if not png_full_image_files:
+    #     time.sleep(0.1)
+    #     continue
+
+    # Check for finished flag and create it if not exists
+    if not os.path.exists(sam3_finished_flag_path):
         time.sleep(0.1)
         continue
-    
+        
     png_files = [f for f in os.listdir(INPUT_DIR) if f.lower().endswith('.png')]
     # Take the .png file with the longest name
     IMAGE_FILENAME = max(png_files, key=lambda f: len(os.path.splitext(f)[0]))
@@ -232,7 +292,7 @@ while True:
     if os.path.exists(done_flag_path):
         os.remove(done_flag_path)
     
-    run_sam3d(config_path, IMAGE_PATH, DONE_DIR, OUTPUT_DIR, PROMPT_NAME)
+    run_sam3d(inference, IMAGE_PATH, DONE_DIR, OUTPUT_DIR, PROMPT_NAME)
     
     elapsed_time = time.time() - start_time
     print(f"Job finished! ({elapsed_time:.2f})s")

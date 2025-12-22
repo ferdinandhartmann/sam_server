@@ -36,7 +36,6 @@ from sklearn.cluster import KMeans
 from skimage.color import rgb2lab, lab2rgb
 from matplotlib.colors import to_rgb
 
-
 def save_masks_as_pngs(inference_state, output_dir, img_np):
     for idx, mask in enumerate(inference_state["masks"]):
         mask_np = mask.squeeze(0).cpu().numpy().astype("uint8")
@@ -48,6 +47,7 @@ def save_masks_as_pngs(inference_state, output_dir, img_np):
         obj_save_path = os.path.join(output_dir, f"{idx}.png")
         obj_img.save(obj_save_path)
         print(f"Saved object {idx} to {obj_save_path}")
+    return True
 
 def generate_colors(n_colors=256, n_samples=5000):
     # Step 1: Random RGB samples
@@ -132,8 +132,6 @@ def run_sam(model, image_path, prompt_path, output_dir, done_dir, colors, final_
     
     print(f"Detected {len(inference_state['masks'])} masks, saving masks and visualization...")
 
-    img_np = np.array(image)
-    save_masks_as_pngs(inference_state, done_dir, img_np)
     # Save the raw image in the done_dir
     # Sanitize prompt to create a valid filename
     safe_prompt = "".join(c if c.isalnum() or c in ('_', '-') else '_' for c in prompt.lower())
@@ -141,6 +139,15 @@ def run_sam(model, image_path, prompt_path, output_dir, done_dir, colors, final_
     raw_img_save_path = os.path.join(done_dir, f"{safe_prompt}.png")
     image.save(raw_img_save_path)
     print(f"Saved raw image to {raw_img_save_path}")
+    
+    img_np = np.array(image)
+    if save_masks_as_pngs(inference_state, done_dir, img_np) == True:
+            # Create a "sam3_worker.finished" file in the done_dir
+        finished_flag_path = os.path.join(done_dir, "sam3_worker_finished.flag")
+        open(finished_flag_path, "a").close()
+        print(f"Created finished flag at {finished_flag_path}")
+    else :
+        print("Error saving masks as PNGs, skipping creating finished flag.")
 
     visualize_segmentation_results(image_path, final_output_dir, inference_state, colors, safe_prompt)
     print("Visualization complete.")
